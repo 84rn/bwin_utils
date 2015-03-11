@@ -1,8 +1,11 @@
-#include "bwin_utils.h"
-
+#include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
-#include <tchar.h>
+#include <math.h>
+#include <stdio.h>
+
+#define DLL_EXPORT
+#include "bwin_utils.h"
 
 #define HANDS_ROWS (13 + 13 + 12 + 11 + 10 + 9 + 8 + 7 + 6 + 5 + 4 + 3 + 2)
 #define OPPONENTS_MAX 8
@@ -22,10 +25,43 @@ enum table_type
 	X5,
 	X4,
 	X3,
-	TABLE_TYPES_NUM
+	TABLE_TYPE_NUM
 };
 
-static unsigned char table_rows[] = { 13, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2 };
+enum table_start_ix
+{
+	IX_PAIRS = 0,
+	IX_XA = IX_PAIRS + 13 + 1, /* Account for the suited & connected row - the first row in every table after this one */
+	IX_XK = IX_XA + 13,
+	IX_XQ = IX_XK + 12,
+	IX_XJ = IX_XQ + 11,
+	IX_XT = IX_XJ + 10,
+	IX_X9 = IX_XT + 9,
+	IX_X8 = IX_X9 + 8,
+	IX_X7 = IX_X8 + 7,
+	IX_X6 = IX_X7 + 6,
+	IX_X5 = IX_X6 + 5,
+	IX_X4 = IX_X5 + 4,
+	IX_X3 = IX_X4 + 3
+};
+
+static unsigned char table_start_indexes[] =
+{
+	IX_PAIRS,
+	IX_XA,
+	IX_XK,
+	IX_XQ,
+	IX_XJ,
+	IX_XT,
+	IX_X9,
+	IX_X8,
+	IX_X7,
+	IX_X6,
+	IX_X5,
+	IX_X4,
+	IX_X3
+};
+
 static unsigned char hand_percent[HANDS_ROWS * OPPONENTS_MAX] =
 {
 
@@ -96,8 +132,8 @@ static unsigned char hand_percent[HANDS_ROWS * OPPONENTS_MAX] =
 	54, 39, 31, 26, 23, 20, 18, 16, // T9s
 	52, 32, 28, 23, 19, 16, 14, 13, // T9
 	50, 34, 25, 20, 17, 14, 13, 11,
-	48, 31, 23, 18, 15, 13, 11, 10, 
-	46, 29, 21, 17, 13, 11, 10, 8, 
+	48, 31, 23, 18, 15, 13, 11, 10,
+	46, 29, 21, 17, 13, 11, 10, 8,
 	44, 27, 19, 15, 12, 10, 8, 7,
 	43, 26, 19, 14, 12, 10, 8, 7,
 	42, 26, 18, 14, 11, 9, 8, 7,
@@ -147,44 +183,55 @@ static unsigned char hand_percent[HANDS_ROWS * OPPONENTS_MAX] =
 
 };
 
-DECLDIR unsigned char card_to_num(char c)
+char card_to_num(char c)
 {
-	wint_t cc;
+	int cc;
 	cc = toupper(c);
 
-	if (cc <= _T('9') && cc >= _T('2'))
-		return cc - _T('0');
+	if (cc <= '9' && cc >= '2')
+		return cc - '0';
 	else
 		switch (cc)
 	{
-		case _T('A'):
+		case 'A':
 			return 14;
-		case _T('K'):
+		case 'K':
 			return 13;
-		case _T('Q'):
+		case 'Q':
 			return 12;
-		case _T('J'):
+		case 'J':
 			return 11;
-		case _T('T'):
+		case 'T':
 			return 10;
 		default:
 			break;
 	}
 
-	return 0;
+	return -1;
 }
 
-DECLDIR int card_range(char *t, int opponents, int *range)
+char card_diff(char c1, char c2)
 {
-	size_t len = _tcslen(t), type, table_ix = 0, i;
-	char c1, c2, s;
+	unsigned char _c1 = card_to_num(c1);
+	unsigned char _c2 = card_to_num(c2);
+
+	if (_c1 == -1 || _c2 == -1)
+		return -1;
+
+	return abs(_c1 - _c2);
+}
+
+int card_range(char *t, int opponents, int *range)
+{
+	size_t len = strlen(t), type, table_ix = 0, table_offset = 0, s_defined = 0;
+	char c1, c2, suited;
 
 	if (len != 2 && len != 3 || opponents < 1 || opponents > 8 || !range)
 		return 1;
 
 	c1 = t[0], c2 = t[1];
 
-	if (!card_to_num(c1) || !card_to_num(c2))
+	if (card_to_num(c1) < 2 || card_to_num(c2) < 2)
 		return 1;
 
 	if (card_to_num(c2) > card_to_num(c1))
@@ -193,23 +240,38 @@ DECLDIR int card_range(char *t, int opponents, int *range)
 		c1 = c2;
 		c2 = tmp;
 	}
-	
+
 	/* Table type (enum) */
-	type = (c1 == c2 ? PAIRS : card_to_num(_T('A')) - card_to_num(c1) + 1);
-	
-	/* Add number of rows for every previous type */
-	for (i = 0; i < type; i++)
-		table_ix += table_rows[i] * OPPONENTS_MAX;
+	type = (c1 == c2 ? PAIRS : card_diff('A', c1) + 1);
+
+	if (type < PAIRS || type > X3)
+		return 1;
+
+	/* Check if suited - PAIRS are never suited */
+	suited = ((t[2] == 's' || t[2] == 'S') && (type != PAIRS) ? 1 : 0);
+
+	/* Get base index */
+	table_ix = table_start_indexes[type];
 
 	if (type == PAIRS)
-		table_ix += (card_to_num(_T('A')) - card_to_num(c1)) * OPPONENTS_MAX;
+		table_ix += card_diff('A', c1);
 	else
-	{
-		s = (t[2] == _T('s') && ((card_to_num(c1) - card_to_num(c2)) == 1) ? 1 : 0);
+		table_ix += (card_diff(c1, c2) - 1);
 
-		table_ix += (card_to_num(c1) - card_to_num(c2) - s) * OPPONENTS_MAX;
+	/* Row -1 is for connected and suited cards */
+	if (s_defined = (suited && (card_diff(c1, c2) == 1) ? 1 : 0))
+		--table_ix;
+
+	*range = hand_percent[table_ix * OPPONENTS_MAX + opponents - 1];
+
+	/* If the cards are not connected, but suited, if there's 1 opponent add 2%, else 3% */
+	if (suited && !s_defined)
+	{
+		if (opponents == 1)
+			*range += 2;
+		else
+			*range += 3;
 	}
-	
-	*range = hand_percent[table_ix + opponents - 1];
+
 	return 0;
 }
